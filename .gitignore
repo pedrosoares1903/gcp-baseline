@@ -1,0 +1,16 @@
+# State: never. It holds every field value of every resource, in plain text.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Downloaded providers: hundreds of megabytes, rebuilt by `terraform init`.
+.terraform/
+
+# Saved plans: they are an artifact of one moment, not source.
+tfplan
+*.tfplan
+
+# Local overrides
+*.auto.tfvars
+override.tf
+override_*.tf

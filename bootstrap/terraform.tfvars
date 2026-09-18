@@ -1,0 +1,5 @@
+project_id        = "project-caadee7a-7323-444d-91a"
+region            = "europe-west1"
+github_owner      = "pedrosoares1903"
+github_repository = "pedrosoares1903/gcp-baseline"
+state_bucket_name = "project-caadee7a-7323-444d-91a-tfstate"
