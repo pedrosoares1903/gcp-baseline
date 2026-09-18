@@ -1,0 +1,202 @@
+name: Terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege at the top. Only the jobs that need more say so.
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.13.3"
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      # Formatting first: it is the cheapest check that exists.
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      # `-backend=false` is the important flag: it checks the syntax and the
+      # references without ever talking to Google. No credentials are needed,
+      # and none are granted to this job.
+      - name: Validate every configuration
+        run: |
+          for dir in bootstrap modules/network environments/*; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Pinned on purpose: a scanner that updates itself turns a green pipeline
+      # red on a morning when nobody changed anything.
+      - name: Install checkov
+        run: pip install checkov==3.3.17
+
+      - name: Scan
+        run: checkov --directory . --framework terraform --compact --quiet
+
+  plan:
+    name: Plan (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [validate, security]
+
+    permissions:
+      contents: read
+      # Required to obtain the OIDC token. Without it the auth step fails with
+      # a message that does not mention this line.
+      id-token: write
+      # Required to post the plan as a comment.
+      pull-requests: write
+
+    strategy:
+      # One environment failing should not hide the other's plan.
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.CI_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform -chdir=environments/${{ matrix.environment }} init -input=false
+
+      - name: Plan
+        id: plan
+        run: |
+          terraform -chdir=environments/${{ matrix.environment }} \
+            plan -input=false -lock-timeout=5m -out=tfplan
+          terraform -chdir=environments/${{ matrix.environment }} \
+            show -no-color tfplan > plan.txt
+
+      # The reviewer should not have to open the logs to see what changes.
+      - name: Comment the plan on the pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan.txt', 'utf8');
+            const body = [
+              '### Terraform plan — `${{ matrix.environment }}`',
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```terraform',
+              plan.length > 60000 ? plan.slice(0, 60000) + '\n... truncated' : plan,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      # Only on main: the plan that the apply job will consume.
+      - name: Upload the plan
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.sha }}
+          path: environments/${{ matrix.environment }}/tfplan
+          retention-days: 5
+
+  apply:
+    name: Apply (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: plan
+
+    # A pull request never changes anything.
+    if: github.event_name == 'push'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      # Environments are applied one at a time, dev first.
+      max-parallel: 1
+      matrix:
+        environment: [dev, prod]
+
+    # Named environments make the approval rule possible without touching
+    # this file — it lives in the repository settings.
+    environment: ${{ matrix.environment }}
+
+    # One apply at a time. A second push waits instead of racing the state lock.
+    concurrency:
+      group: apply-${{ matrix.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.CI_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.sha }}
+          path: environments/${{ matrix.environment }}
+
+      - name: Init
+        run: terraform -chdir=environments/${{ matrix.environment }} init -input=false
+
+      # The saved plan, not a fresh one. If the state moved since the plan was
+      # produced, Terraform refuses to apply it and the job fails — which is
+      # the correct outcome.
+      - name: Apply
+        run: |
+          terraform -chdir=environments/${{ matrix.environment }} \
+            apply -input=false -lock-timeout=5m tfplan
