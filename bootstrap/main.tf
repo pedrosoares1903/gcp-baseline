@@ -14,7 +14,13 @@ locals {
   # See the "Known limitations" section: networkAdmin is broader than ideal.
   ci_roles = [
     "roles/compute.networkAdmin",
-    "roles/serviceusage.serviceUsageAdmin",
+
+    # networkAdmin covers networks and subnets but grants only *read* on firewall
+    # rules — creating them needs securityAdmin. Found the hard way: dev had been
+    # applied by hand, so the pipeline only hit this when it reached prod.
+    "roles/compute.securityAdmin",
+
+    "roles/serviceusage.serviceUsageAdmin"
   ]
 }
 
