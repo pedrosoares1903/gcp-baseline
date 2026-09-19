@@ -43,6 +43,9 @@ resource "google_storage_bucket" "state" {
   versioning {
     enabled = true
   }
+  logging {
+    log_bucket = google_storage_bucket.state_access_logs.name
+  }
 
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
@@ -71,6 +74,7 @@ resource "google_iam_workload_identity_pool" "github" {
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {
+  # checkov:skip=CKV_GCP_125: requires pinning assertion.sub to one ref; this pipeline authenticates from pull requests as well as main. Trust is scoped by repository_owner + repository in the condition below, and by the service account binding on attribute.repository.
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-oidc"
@@ -87,7 +91,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # Without it, a workflow in ANY repository on GitHub can present a token to
   # this pool. Google refuses to create a GitHub provider that has no attribute
   # condition, which is the only reason this is hard to get wrong.
-  attribute_condition = "assertion.repository_owner == \"${var.github_owner}\""
+  attribute_condition = "assertion.repository_owner == \"${var.github_owner}\" && assertion.repository == \"${var.github_repository}\""
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -122,4 +126,42 @@ resource "google_storage_bucket_iam_member" "terraform_ci_state" {
   bucket = google_storage_bucket.state.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.terraform_ci.email}"
+}
+
+resource "google_storage_bucket" "state_access_logs" {
+  # checkov:skip=CKV_GCP_62: this IS the access-log bucket; pointing it at itself would recurse
+  name     = "${var.state_bucket_name}-access-logs"
+  project  = var.project_id
+  location = var.region
+
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  versioning {
+    enabled = true
+  }
+
+  # Live objects: keep 90 days.
+  lifecycle_rule {
+    condition {
+      age        = 90
+      with_state = "LIVE"
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # ⚠️ With versioning on, deleting an object only makes it noncurrent — it
+  # stays and it is still billed. Without this rule the cleanup above would
+  # reclaim nothing.
+  lifecycle_rule {
+    condition {
+      with_state                 = "ARCHIVED"
+      days_since_noncurrent_time = 7
+    }
+    action {
+      type = "Delete"
+    }
+  }
 }

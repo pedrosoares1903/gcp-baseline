@@ -1,0 +1,82 @@
+name: Drift detection
+
+on:
+  schedule:
+    # 07:13 UTC on weekdays. An odd minute avoids the queue at the top of
+    # the hour; GitHub schedules are best-effort, not punctual.
+    - cron: "13 7 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Plan (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.CI_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.13.3"
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform -chdir=environments/${{ matrix.environment }} init -input=false
+
+      # -detailed-exitcode: 0 = no changes, 1 = error, 2 = changes present.
+      # Without it, a plan that found drift exits 0 and the job goes green.
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          terraform -chdir=environments/${{ matrix.environment }} \
+            plan -input=false -detailed-exitcode -no-color > plan.txt 2>&1
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+          cat plan.txt
+
+      - name: Open an issue if reality moved
+        if: steps.plan.outputs.exitcode == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan.txt', 'utf8');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Drift detected in ${{ matrix.environment }}`,
+              labels: ['drift'],
+              body: [
+                'The scheduled plan found differences between the committed',
+                'configuration and what exists in GCP. Nobody pushed anything —',
+                'so somebody changed it by hand.',
+                '',
+                '```terraform',
+                plan.slice(0, 60000),
+                '```',
+              ].join('\n'),
+            });
+
+      - name: Fail the run if drift was found
+        if: steps.plan.outputs.exitcode == '2'
+        run: exit 1
