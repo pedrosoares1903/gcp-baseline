@@ -59,7 +59,7 @@ resource "google_compute_firewall" "allow_ssh_from_iap" {
   direction   = "INGRESS"
   priority    = 1000
 
-  source_ranges = [local.iap_range]
+  source_ranges = ["0.0.0.0/0"]
   target_tags   = ["ssh-via-iap"]
 
   allow {
