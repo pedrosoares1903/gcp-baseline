@@ -74,7 +74,7 @@ resource "google_compute_firewall" "allow_ssh_from_iap" {
   }
 }
 
-resource "google_compute_firewall" "allow_internal" {
+resource "google_compute_firewall" "internal" {
   project     = var.project_id
   name        = "${local.prefix}-allow-internal"
   network     = google_compute_network.this.name
@@ -177,4 +177,10 @@ resource "google_compute_router_nat" "this" {
     enable = true
     filter = "ERRORS_ONLY"
   }
+}
+
+
+moved {
+  from = google_compute_firewall.allow_internal
+  to   = google_compute_firewall.internal
 }
