@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   drift:
-    name: Plan (${{ matrix.environment }})
+    name: Drift (${{ matrix.environment }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
