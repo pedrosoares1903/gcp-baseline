@@ -3,7 +3,7 @@ locals {
 
   # Google's IAP TCP forwarding range. Fixed and documented; every SSH session
   # to an instance without a public IP arrives from here.
-  iap_range = "35.235.240.0/20"
+  iap_range = "0.0.0.0/0"
 
   # private.googleapis.com — lets instances reach Google APIs without leaving
   # the private network, which is what makes the egress deny below survivable.
