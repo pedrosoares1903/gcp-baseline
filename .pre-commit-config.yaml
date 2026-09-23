@@ -1,0 +1,16 @@
+# Local hooks. Activate once per clone:  pre-commit install
+# They only warn — `git commit --no-verify` skips them. CI is the control.
+repos:
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.108.1
+    hooks:
+      - id: terraform_fmt
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # The whole repository is built on "there is no key anywhere".
+      - id: detect-private-key
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
