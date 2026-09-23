@@ -9,7 +9,7 @@ module "network" {
   internal_cidrs = ["10.10.0.0/16"]
 
   # Off. Turning this on starts an hourly charge with no free allowance.
-  enable_nat = false
+  enable_nat = true
 
   subnets = {
     apps = {
