@@ -8,7 +8,7 @@ module "network" {
 
   # Off here too, for cost. In a real environment this would be true, and this
   # line is the one a reviewer should stop at.
-  enable_nat = false
+  enable_nat = true
 
   subnets = {
     apps = {
